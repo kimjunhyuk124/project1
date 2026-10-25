@@ -1,0 +1,85 @@
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+
+const int relayPin = A1; 
+const int tempPin = A0;  
+
+const int RELAY_ON = HIGH;
+const int RELAY_OFF = LOW;
+
+Adafruit_INA219 ina219;
+
+// 🛡️ 하드웨어 절대 안전 커트라인
+const float CUTOFF_VOLTAGE = 2.8; 
+const float DANGER_TEMP = 60.0;
+
+bool isDischarging = false; 
+unsigned long lastSendTime = 0; 
+
+void setup() {
+  Serial.setTx(PA9);
+  Serial.setRx(PA10);
+  Serial.begin(115200); // 🚨 파이썬 통신 속도
+  delay(2000); 
+
+  Wire.setSCL(PB6);
+  Wire.setSDA(PB7);
+  Wire.begin();
+
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, RELAY_OFF); // 시작 시 무조건 릴레이 끄고 대기
+
+  if (!ina219.begin()) {
+    Serial.println("❌ INA219 센서 오류");
+  } else {
+    ina219.setCalibration_32V_2A(); 
+  }
+}
+
+void loop() {
+  // 1. 파이썬 명령 수신 대기 (핸드쉐이킹)
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+    
+    if (cmd == 'S') { 
+      isDischarging = true;
+      digitalWrite(relayPin, RELAY_ON); // 방전 개시
+    } 
+    else if (cmd == 'E') { 
+      isDischarging = false;
+      digitalWrite(relayPin, RELAY_OFF); // 강제 차단/종료
+    }
+  }
+
+  // 2. 방전 중 데이터 전송 로직
+  if (isDischarging) {
+    float busVoltage = ina219.getBusVoltage_V();
+    float shuntVoltage = ina219.getShuntVoltage_mV();
+    float current_mA = ina219.getCurrent_mA();
+    float loadVoltage = busVoltage + (shuntVoltage / 1000.0); 
+    
+    int tempRaw = analogRead(tempPin); 
+    float module_R = 1867.0; 
+    float R_NTC = module_R * (1023.0 - tempRaw) / tempRaw; 
+    float B = 3950.0; 
+    float tempK = 1.0 / (log(R_NTC / 10000.0) / B + 1.0 / 298.15); 
+    float tempC = tempK - 273.15; 
+
+    // 하드웨어 자체 생존망
+    if (loadVoltage <= CUTOFF_VOLTAGE || tempC >= DANGER_TEMP) {
+      isDischarging = false;
+      digitalWrite(relayPin, RELAY_OFF); 
+      return;
+    }
+
+    // 정확히 1초마다 파이썬 포맷에 맞춰 데이터 송신 ("전압,전류,온도")
+    if (millis() - lastSendTime >= 1000) {
+      lastSendTime = millis();
+      Serial.print(loadVoltage, 3);
+      Serial.print(",");
+      Serial.print(current_mA, 1);
+      Serial.print(",");
+      Serial.println(tempC, 2);
+    }
+  }
+}

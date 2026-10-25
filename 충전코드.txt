@@ -1,0 +1,60 @@
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+
+const int relayPin = A1; 
+const int tempPin = A0;  
+
+const int RELAY_ON = HIGH;
+const int RELAY_OFF = LOW;
+
+Adafruit_INA219 ina219;
+
+void setup() {
+  Serial.setTx(PA9);
+  Serial.setRx(PA10);
+  Serial.begin(115200);
+  delay(2000); 
+
+  Wire.setSCL(PB6);
+  Wire.setSDA(PB7);
+  Wire.begin();
+
+  pinMode(relayPin, OUTPUT);
+
+  if (!ina219.begin()) {
+    Serial.println("❌ INA219 센서 오류");
+  } else {
+    ina219.setCalibration_32V_2A(); 
+  }
+
+  // 🚨 릴레이를 무조건 'OFF'로 고정하여 방전 원천 차단!
+  digitalWrite(relayPin, RELAY_OFF);
+  Serial.println("\n⚡ [충전 모드] 4.2V 완충이 될 때까지 대기합니다.");
+}
+
+void loop() {
+  digitalWrite(relayPin, RELAY_OFF); // 항상 OFF 유지
+
+  float busVoltage = ina219.getBusVoltage_V();
+  float shuntVoltage = ina219.getShuntVoltage_mV();
+  float current_mA = abs(ina219.getCurrent_mA()); 
+  float loadVoltage = busVoltage + (shuntVoltage / 1000.0); 
+  
+  int tempRaw = analogRead(tempPin); 
+  float module_R = 1867.0; 
+  float R_NTC = module_R * (1023.0 - tempRaw) / tempRaw; 
+
+  float B = 3950.0; 
+  float tempK = 1.0 / (log(R_NTC / 10000.0) / B + 1.0 / 298.15); 
+  float tempC = tempK - 273.15; 
+
+  Serial.print("  ➔ 전압: "); 
+  Serial.print(loadVoltage); 
+  Serial.print(" V  |  충전전류: "); 
+  Serial.print(current_mA); 
+  Serial.print(" mA  |  온도: "); 
+  Serial.print(tempC); 
+  Serial.println(" ℃");
+  
+  delay(2000); 
+}
